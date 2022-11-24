@@ -1,0 +1,5 @@
+---
+- name: join cluster
+  tags: join
+  when: kubelet_conf.stat.exists == False
+  ansible.builtin.command: "{{ kubeadm_worker_join }}"

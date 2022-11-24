@@ -1,0 +1,6 @@
+---
+- name: Worker Nodes 
+  hosts: workers
+  roles:
+    - common
+    - worker

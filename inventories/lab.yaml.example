@@ -1,0 +1,35 @@
+---
+all:
+  vars:
+    ansible_user: ansible
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa
+    ansible_become: true
+  children:
+    controllers:
+      hosts:
+        ctrl-01:
+          ansible_host: controller-1.local
+          internal_host: 192.168.10.10
+        ctrl-02:
+          ansible_host: controller-2.local
+          internal_host: 192.168.10.11
+        ctrl-03:
+          ansible_host: controller-3.local
+          internal_host: 192.168.10.12
+    workers:
+      hosts:
+        wrkr-01:
+          ansible_host: worker-1.local
+          internal_host: 192.168.10.20
+        wrkr-02:
+          ansible_host: worker-2.local
+          internal_host: 192.168.10.21
+        wrkr-03:
+          ansible_host: worker-3.local
+          internal_host: 192.168.10.22
+        wrkr-04:
+          ansible_host: worker-4.local
+          internal_host: 192.168.10.23
+        wrkr-05:
+          ansible_host: worker-5.local
+          internal_host: 192.168.10.24

@@ -1,0 +1,6 @@
+---
+- name: Controller Nodes
+  hosts: controllers
+  roles:
+    - common
+    - controller

@@ -1,0 +1,65 @@
+---
+- name: init cluster
+  hosts: controllers[0]
+  roles:
+    - controller
+  tasks:
+    - name: reset existing cluster
+      ansible.builtin.command: kubeadm reset -f
+      args:
+        removes: /etc/kubernetes/kubelet.conf
+    - name: create config
+      ansible.builtin.template:
+        src: kubeadm-config.yaml
+        dest: /root/kubeadm-config.yaml
+        owner: root
+        group: root
+        mode: '0600'
+    - name: init new cluster
+      ansible.builtin.command: |
+        kubeadm init --config /root/kubeadm-config.yaml \
+          --skip-phases addon/kube-proxy \
+          --upload-certs
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+    - name: setup network
+      block:
+        - name: download cilium cli
+          ansible.builtin.get_url:
+            url: https://github.com/cilium/cilium-cli/releases/download/v0.12.7/cilium-linux-amd64.tar.gz
+            dest: /root/cilium-linux-amd64.tar.gz
+            checksum: sha256:9c4911f5689d9cf90edb3631f960469282bae055c5cdc70c0c1acef3c7362bfb
+        - name: extract cilium cli
+          ansible.builtin.unarchive:
+            src: /root/cilium-linux-amd64.tar.gz
+            dest: /usr/local/bin
+            remote_src: yes
+        - name: install cilium in the cluster
+          ansible.builtin.shell: |
+            KUBECONFIG=/etc/kubernetes/admin.conf cilium install \
+            --helm-set ipam.mode=kubernetes \
+            --helm-set k8s.requireIPv4PodCIDR=true \ 
+            --helm-set kubeProxyReplacement=strict \
+            --helm-set ingressController.enabled=true
+          changed_when: false
+        #- name: enable hubble
+        #  ansible.builtin.shell: |
+        #    KUBECONFIG=/etc/kubernetes/admin.conf cilium hubble enable --ui
+        #  changed_when: false
+
+    - name: distribute KUBECONFIG
+      tags: kubeconfig
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ item.dest }}"
+        owner: "{{ item.user }}"
+        mode: 0600
+        remote_src: yes
+      loop:
+        - dest: "/home/{{ ansible_user }}/.kube/config"
+          user: "{{ ansible_user }}"
+        - dest: /root/.kube/config
+          user: root
+        
+

@@ -1,0 +1,137 @@
+---
+- name: ensure swap is turned off
+  block:
+    - name: disable swap
+      command: swapoff -a
+      changed_when: true
+      when: ansible_swaptotal_mb > 0
+
+    - name: remove swap from fstab
+      lineinfile:
+        path: '/etc/fstab'
+        regexp: '\sswap\s'
+        state: 'absent'
+
+- name: ensure hostname is correct
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+- name: ensure we have controllers in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: ".*{{ hostvars[item]['ansible_hostname'] }}"
+    line: "{{ hostvars[item]['internal_host'] }}\t{{ hostvars[item]['ansible_hostname'] }}"
+    state: present
+    owner: root
+    group: root
+    mode: 0644
+  loop: "{{ groups['controllers'] }}"
+
+- name: ensure we have modules
+  block:
+    - name: mudules loaded
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - br_netfilter
+        - overlay
+    - name: ensure modules are loaded on boot
+      ansible.builtin.lineinfile:
+        path: /etc/modules
+        line: "{{ item }}"
+        owner: root
+        group: root
+        mode: 0644
+      loop:
+        - br_netfilter
+        - overlay
+
+- name: ensure sysctl config for k8s is correct
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    sysctl_file: /etc/sysctl.d/kubernetes.conf
+    value: '1'
+    sysctl_set: yes
+    state: present
+    reload: yes
+  loop:
+    - net.bridge.bridge-nf-call-ip6tables 
+    - net.bridge.bridge-nf-call-iptables 
+    - net.ipv4.ip_forward 
+
+- name: ensure containerd & k8s packages are installed
+  block:
+    - name: gpg keys present
+      ansible.builtin.apt_key:
+        url: "{{ item }}"
+        state: present
+      loop:
+        - https://download.docker.com/linux/ubuntu/gpg
+        - https://packages.cloud.google.com/apt/doc/apt-key.gpg
+    - name: repos present
+      ansible.builtin.apt_repository:
+        repo: "{{ item.repo }}"
+        state: present
+        filename: "{{ item.file }}"
+      loop:
+        - repo: deb http://apt.kubernetes.io/ kubernetes-xenial main
+          file: kubernetes
+    - name: packages installed
+      ansible.builtin.package:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - containerd
+        - kubeadm=1.25.4-00
+        - kubelet=1.25.4-00
+        - kubectl=1.25.4-00
+    - name: hold kube packages
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+
+- name: pre-pull images
+  # TODO:
+  # check if we already have the images?
+  # crictl image list |awk '{print $1 ":" $2}'
+  command: |
+    kubeadm config images pull \
+    --kubernetes-version 1.25.4
+  changed_when: false
+
+- name: ensure kubelet service is enabled
+  tags: kubelet
+  ansible.builtin.service:
+    name: kubelet
+    enabled: yes
+
+- name: check if kubelet config exists
+  tags: join
+  stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: get join command
+  tags: join
+  block:
+    - name: generate join token
+      shell: kubeadm token create --print-join-command
+      register: kubeadm_join_cmd
+      delegate_to: "{{ groups['controllers'][0] }}"
+      run_once: true
+    - set_fact:
+        kubeadm_worker_join: "{{ kubeadm_join_cmd.stdout }}"
+    - name: generate control-plane ca
+      shell: |
+        kubeadm init phase upload-certs --upload-certs |tail -n 1
+      register: kubeadm_ca_cmd
+      delegate_to: "{{ groups['controllers'][0] }}"
+      run_once: true
+    - set_fact:
+        kubeadm_control_join: "{{ kubeadm_worker_join }} --control-plane --certificate-key {{ kubeadm_ca_cmd.stdout }}"
+
